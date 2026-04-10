@@ -154,7 +154,7 @@ model PushToken {
 model Subscription {
   id                    String    @id @default(cuid())
   originalTransactionId String    @unique
-  status                String    @default("trial") // trial | active | expired | revoked
+  status                String    @default("active") // active | expired | revoked
   trialStartedAt        DateTime?
   trialExpiresAt        DateTime?
   paidAt                DateTime?

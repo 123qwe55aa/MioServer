@@ -60,11 +60,17 @@ async function main() {
 
                 // 2. Send push notifications to devices whose trial expires within 24h
                 const expiring = await findExpiringTrials();
+                let notifyFailed = 0;
                 for (const device of expiring) {
-                    await sendTrialExpiryNotification(device.id);
+                    try {
+                        await sendTrialExpiryNotification(device.id);
+                    } catch (err) {
+                        notifyFailed++;
+                        console.error(`[subscription-cleanup] Failed to notify ${device.id}:`, err);
+                    }
                 }
                 if (expiring.length > 0) {
-                    console.log(`[subscription-cleanup] Sent trial expiry notifications to ${expiring.length} devices`);
+                    console.log(`[subscription-cleanup] Trial expiry: ${expiring.length} devices, ${notifyFailed} failed`);
                 }
             } catch (err) {
                 console.error('[subscription-cleanup] Error:', err);

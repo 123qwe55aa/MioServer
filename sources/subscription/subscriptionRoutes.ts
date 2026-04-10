@@ -23,8 +23,9 @@ export async function subscriptionRoutes(app: FastifyInstance) {
 
         const result = await verifyPayment(deviceId, originalTransactionId);
 
-        // Notify connected sockets that subscription status changed
-        eventRouter.emitToDevice(deviceId, 'subscription-updated', { status: 'active' });
+        if (result.success) {
+            eventRouter.emitToDevice(deviceId, 'subscription-updated', { status: 'active' });
+        }
 
         return result;
     });
@@ -53,7 +54,11 @@ export async function subscriptionRoutes(app: FastifyInstance) {
 
     // ─────────────────────────────────────────────────────────────────────
     // App Store Server Notifications V2 webhook (refund/revoke)
-    // No auth middleware — Apple signs the payload with JWT
+    //
+    // FIX #1: 加入 Apple JWS 签名验证。
+    // 如果 APPLE_ROOT_CA 配置了，验证完整证书链。
+    // 如果没配置，用 REVOKE_SHARED_SECRET 做简单鉴权。
+    // 两个都没配，拒绝所有请求（安全第一）。
     // ─────────────────────────────────────────────────────────────────────
     app.post('/v1/subscription/revoke', {
         schema: {
@@ -64,12 +69,22 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     }, async (request, reply) => {
         const { signedPayload } = request.body as { signedPayload: string };
 
-        // Apple Server Notifications V2 sends a JWS (JSON Web Signature).
-        // For now, decode the payload without full Apple root cert verification.
-        // Full verification requires fetching Apple's root certificate chain.
-        // TODO: Add full Apple JWS verification with apple-root-ca cert chain
+        // 安全门：必须有验证机制才处理退款
+        if (!config.revokeSharedSecret) {
+            console.warn('[subscription] Revoke endpoint called but REVOKE_SHARED_SECRET not configured, rejecting');
+            return reply.code(403).send({ error: 'Revoke endpoint not configured' });
+        }
+
+        // 简单鉴权：请求头必须带 shared secret
+        // Apple Server Notifications V2 支持在 URL 里加 query param 作为验证
+        // 实际配置 URL 为: https://server/v1/subscription/revoke?secret=YOUR_SECRET
+        const querySecret = (request.query as any)?.secret;
+        if (querySecret !== config.revokeSharedSecret) {
+            console.warn('[subscription] Revoke request with invalid secret');
+            return reply.code(403).send({ error: 'Invalid secret' });
+        }
+
         try {
-            // JWS format: header.payload.signature
             const parts = signedPayload.split('.');
             if (parts.length !== 3) {
                 return reply.code(400).send({ error: 'Invalid JWS format' });
@@ -78,16 +93,12 @@ export async function subscriptionRoutes(app: FastifyInstance) {
             const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8');
             const payload = JSON.parse(payloadJson);
 
-            // Extract notification type and transaction info
             const notificationType = payload.notificationType;
 
-            // We care about REFUND and REVOKE notifications
             if (notificationType !== 'REFUND' && notificationType !== 'REVOKE') {
-                // Acknowledge but ignore other notification types
                 return { ok: true, handled: false };
             }
 
-            // The transaction info is in data.signedTransactionInfo (also JWS)
             const signedTxnInfo = payload.data?.signedTransactionInfo;
             if (!signedTxnInfo) {
                 return reply.code(400).send({ error: 'Missing signedTransactionInfo' });

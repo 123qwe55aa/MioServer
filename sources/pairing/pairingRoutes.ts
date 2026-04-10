@@ -168,12 +168,17 @@ export async function pairingRoutes(app: FastifyInstance) {
 
         // Auto-start trial for iOS device on first pairing
         if (config.enforceSubscription) {
-            const iosDevice = await db.device.findUnique({
-                where: { id: iosDeviceId },
-                select: { kind: true, subscriptionStatus: true },
-            });
-            if (iosDevice?.kind === 'ios' && iosDevice.subscriptionStatus === 'none') {
-                await startTrial(iosDeviceId);
+            try {
+                const iosDevice = await db.device.findUnique({
+                    where: { id: iosDeviceId },
+                    select: { kind: true, subscriptionStatus: true },
+                });
+                if (iosDevice?.kind === 'ios' && iosDevice.subscriptionStatus === 'none') {
+                    await startTrial(iosDeviceId);
+                }
+            } catch (err) {
+                console.error(`[pairing] Failed to auto-start trial for ${iosDeviceId}:`, err);
+                // 配对成功但试用启动失败，不阻断配对流程
             }
         }
 
