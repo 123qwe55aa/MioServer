@@ -44,6 +44,21 @@ export async function checkAccess(deviceId: string): Promise<AccessCheck> {
     }
 
     if (device.subscriptionStatus === 'active') {
+        // 兑换码用户有到期时间，永久付费用户没有
+        if (device.trialExpiresAt) {
+            const now = new Date();
+            if (device.trialExpiresAt > now) {
+                const msLeft = device.trialExpiresAt.getTime() - now.getTime();
+                const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+                return { allowed: true, reason: 'redeemed', status: 'active', daysLeft };
+            }
+            // 兑换码到期
+            await db.device.updateMany({
+                where: { id: deviceId, subscriptionStatus: 'active' },
+                data: { subscriptionStatus: 'expired' },
+            });
+            return { allowed: false, reason: 'access_expired', status: 'expired' };
+        }
         return { allowed: true, reason: 'paid', status: 'active' };
     }
 

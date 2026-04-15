@@ -1,0 +1,147 @@
+import { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { authMiddleware } from '@/auth/middleware';
+import { db } from '@/storage/db';
+import { eventRouter } from '@/socket/socketServer';
+
+export async function redeemRoutes(app: FastifyInstance) {
+    // ─────────────────────────────────────────────────────────────────────
+    // Redeem a promotional code for free access
+    // ─────────────────────────────────────────────────────────────────────
+    app.post('/v1/subscription/redeem', {
+        preHandler: authMiddleware,
+        schema: {
+            body: z.object({
+                code: z.string().min(1).max(50),
+            }),
+        },
+    }, async (request, reply) => {
+        const { code } = request.body as { code: string };
+        const deviceId = request.deviceId!;
+        const normalized = code.trim().toUpperCase();
+
+        // 查找兑换码
+        const redeemCode = await db.redeemCode.findUnique({
+            where: { code: normalized },
+        });
+
+        if (!redeemCode) {
+            return reply.code(404).send({ error: 'invalid_code', message: 'Invalid redeem code' });
+        }
+
+        // 检查码是否过期
+        if (redeemCode.expiresAt && redeemCode.expiresAt < new Date()) {
+            return reply.code(410).send({ error: 'code_expired', message: 'This code has expired' });
+        }
+
+        // 检查使用次数
+        if (redeemCode.usedCount >= redeemCode.maxUses) {
+            return reply.code(410).send({ error: 'code_exhausted', message: 'This code has been fully redeemed' });
+        }
+
+        // 检查该设备是否已用过这个码
+        const existingUsage = await db.redeemCodeUsage.findUnique({
+            where: {
+                redeemCodeId_deviceId: {
+                    redeemCodeId: redeemCode.id,
+                    deviceId,
+                },
+            },
+        });
+
+        if (existingUsage) {
+            return reply.code(409).send({ error: 'already_redeemed', message: 'You have already redeemed this code' });
+        }
+
+        // 计算授权到期时间
+        const grantedUntil = new Date(Date.now() + redeemCode.durationDays * 24 * 60 * 60 * 1000);
+
+        // 记录使用 + 更新使用次数
+        await db.$transaction([
+            db.redeemCodeUsage.create({
+                data: {
+                    redeemCodeId: redeemCode.id,
+                    deviceId,
+                    grantedUntil,
+                },
+            }),
+            db.redeemCode.update({
+                where: { id: redeemCode.id },
+                data: { usedCount: { increment: 1 } },
+            }),
+            db.device.update({
+                where: { id: deviceId },
+                data: {
+                    subscriptionStatus: 'active',
+                    trialExpiresAt: grantedUntil,
+                },
+            }),
+        ]);
+
+        // 通知连接的 socket
+        eventRouter.emitToDevice(deviceId, 'subscription-updated', { status: 'active' });
+
+        console.log(`[redeem] Code ${normalized} redeemed by device ${deviceId}, access until ${grantedUntil.toISOString()}`);
+
+        return {
+            success: true,
+            status: 'active',
+            expiresAt: grantedUntil.toISOString(),
+            durationDays: redeemCode.durationDays,
+        };
+    });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Admin: Generate redeem codes (simple shared-secret auth)
+    // ─────────────────────────────────────────────────────────────────────
+    app.post('/v1/admin/redeem-codes', {
+        schema: {
+            body: z.object({
+                secret: z.string().min(1),
+                count: z.number().int().min(1).max(100).default(1),
+                durationDays: z.number().int().min(1).max(365).default(30),
+                maxUses: z.number().int().min(1).max(1000).default(1),
+                note: z.string().optional(),
+            }),
+        },
+    }, async (request, reply) => {
+        const { secret, count, durationDays, maxUses, note } = request.body as {
+            secret: string;
+            count: number;
+            durationDays: number;
+            maxUses: number;
+            note?: string;
+        };
+
+        // 用 REVOKE_SHARED_SECRET 做管理员鉴权
+        const adminSecret = process.env.REVOKE_SHARED_SECRET;
+        if (!adminSecret || secret !== adminSecret) {
+            return reply.code(403).send({ error: 'Unauthorized' });
+        }
+
+        const codes: string[] = [];
+        for (let i = 0; i < count; i++) {
+            // 生成 8 位随机码: FREE-XXXXXXXX
+            const random = Array.from({ length: 8 }, () =>
+                'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]
+            ).join('');
+            const code = `FREE-${random}`;
+
+            await db.redeemCode.create({
+                data: {
+                    code,
+                    durationDays,
+                    maxUses,
+                    note: note || null,
+                    createdBy: 'admin',
+                },
+            });
+
+            codes.push(code);
+        }
+
+        console.log(`[admin] Generated ${count} redeem codes: ${codes.join(', ')}`);
+
+        return { success: true, codes, durationDays, maxUses };
+    });
+}

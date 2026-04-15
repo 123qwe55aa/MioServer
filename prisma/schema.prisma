@@ -178,6 +178,34 @@ model SubscriptionDevice {
   @@index([deviceId])
 }
 
+/// Redeem codes for free access (promotional, referral, etc.)
+model RedeemCode {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  durationDays Int      @default(30)  // how many days of access this code grants
+  maxUses     Int       @default(1)   // how many times this code can be redeemed
+  usedCount   Int       @default(0)
+  createdBy   String?                 // admin note: who created this code
+  note        String?                 // admin note: purpose (e.g., "Twitter promotion")
+  expiresAt   DateTime?               // code itself expires (not the granted access)
+  createdAt   DateTime  @default(now())
+
+  redemptions RedeemCodeUsage[]
+}
+
+/// Tracks which device redeemed which code
+model RedeemCodeUsage {
+  id           String     @id @default(cuid())
+  redeemCodeId String
+  redeemCode   RedeemCode @relation(fields: [redeemCodeId], references: [id])
+  deviceId     String
+  grantedUntil DateTime   // access expires at this time
+  createdAt    DateTime   @default(now())
+
+  @@unique([redeemCodeId, deviceId])
+  @@index([deviceId])
+}
+
 /// Live Activity push token (scoped to a session).
 /// iOS generates a token per active Live Activity.
 model LiveActivityToken {
