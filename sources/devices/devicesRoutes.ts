@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '@/storage/db';
 import { authMiddleware } from '@/auth/middleware';
 import { getAccessibleDeviceIds } from '@/auth/deviceAccess';
+import { eventRouter } from '@/socket/socketServer';
 
 // Charset excludes I, L, O, 0, 1 to avoid visual confusion.
 const SHORT_CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -67,6 +68,35 @@ export async function devicesRoutes(app: FastifyInstance) {
         let shortCode: string | null = null;
         if (kind === 'mac') {
             shortCode = await ensureShortCode(deviceId);
+
+            // Detect device re-registration: find other Mac devices with the same
+            // name but different ID. If any exist, notify their paired iPhones that
+            // the pairing is stale and they should re-pair with the new code.
+            const staleMacs = await db.device.findMany({
+                where: { name, kind: 'mac', id: { not: deviceId } },
+                select: { id: true },
+            });
+            for (const staleMac of staleMacs) {
+                const links = await db.deviceLink.findMany({
+                    where: {
+                        OR: [
+                            { sourceDeviceId: staleMac.id },
+                            { targetDeviceId: staleMac.id },
+                        ],
+                    },
+                });
+                for (const link of links) {
+                    const iphoneId = link.sourceDeviceId === staleMac.id
+                        ? link.targetDeviceId
+                        : link.sourceDeviceId;
+                    eventRouter.emitToDevice(iphoneId, 'device-reregistered', {
+                        oldDeviceId: staleMac.id,
+                        newDeviceId: deviceId,
+                        name,
+                        newShortCode: shortCode,
+                    });
+                }
+            }
         }
 
         return { deviceId, name, kind, shortCode };
