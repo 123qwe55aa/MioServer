@@ -70,13 +70,35 @@ export async function devicesRoutes(app: FastifyInstance) {
             shortCode = await ensureShortCode(deviceId);
 
             // Detect device re-registration: find other Mac devices with the same
-            // name but different ID. If any exist, notify their paired iPhones that
-            // the pairing is stale and they should re-pair with the new code.
+            // name but different ID that are genuinely stale (not just another Mac
+            // with the same name). A Mac is stale if:
+            // 1. Same name + same kind (mac)
+            // 2. Different deviceId
+            // 3. Not seen in the last hour (lastSeenAt is old or null)
+            // 4. Not currently connected via socket
+            // This prevents false positives when two different people happen to
+            // have Macs with the same default name (e.g. "MacBook Pro").
+            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
             const staleMacs = await db.device.findMany({
-                where: { name, kind: 'mac', id: { not: deviceId } },
+                where: {
+                    name,
+                    kind: 'mac',
+                    id: { not: deviceId },
+                    OR: [
+                        { lastSeenAt: { lt: oneHourAgo } },
+                        { lastSeenAt: null },
+                    ],
+                },
                 select: { id: true },
             });
-            for (const staleMac of staleMacs) {
+
+            // Further filter: skip any "stale" Mac that still has active socket connections
+            const trulyStale = staleMacs.filter(m => {
+                const conns = eventRouter.getConnections(m.id);
+                return conns.length === 0;
+            });
+
+            for (const staleMac of trulyStale) {
                 const links = await db.deviceLink.findMany({
                     where: {
                         OR: [
