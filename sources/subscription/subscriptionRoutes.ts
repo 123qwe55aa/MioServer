@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { X509Certificate } from 'node:crypto';
 import { compactVerify, importX509 } from 'jose';
 import { authMiddleware } from '@/auth/middleware';
-import { verifyPayment, checkAccess, getDeviceSubscription, revokeSubscription } from './subscriptionService';
+import { verifyPayment, checkAccess, getDeviceSubscription, revokeSubscription, startTrial } from './subscriptionService';
 import { getActiveCount } from './concurrencyGuard';
 import { config } from '@/config';
 import { eventRouter } from '@/socket/socketServer';
@@ -116,7 +116,12 @@ export async function subscriptionRoutes(app: FastifyInstance) {
         preHandler: authMiddleware,
     }, async (request) => {
         const deviceId = request.deviceId!;
-        const access = await checkAccess(deviceId);
+        let access = await checkAccess(deviceId);
+        // Mirror socket behavior: auto-start trial for iOS devices with no subscription yet
+        if (!access.allowed && access.reason === 'no_subscription') {
+            await startTrial(deviceId);
+            access = await checkAccess(deviceId);
+        }
         const sub = await getDeviceSubscription(deviceId);
 
         return {
