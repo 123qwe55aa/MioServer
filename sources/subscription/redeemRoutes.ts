@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '@/auth/middleware';
 import { db } from '@/storage/db';
 import { eventRouter } from '@/socket/socketServer';
+import { config } from '@/config';
 
 // In-memory rate limiter for redeem attempts: max 10 failed attempts per device per hour.
 // Prevents brute-force guessing of FREE-XXXXXXXX codes.
@@ -64,11 +65,6 @@ export async function redeemRoutes(app: FastifyInstance) {
             return reply.code(410).send({ error: 'code_expired', message: 'This code has expired' });
         }
 
-        // 检查使用次数
-        if (redeemCode.usedCount >= redeemCode.maxUses) {
-            return reply.code(410).send({ error: 'code_exhausted', message: 'This code has been fully redeemed' });
-        }
-
         // 检查该设备是否已用过这个码
         const existingUsage = await db.redeemCodeUsage.findUnique({
             where: {
@@ -86,27 +82,38 @@ export async function redeemRoutes(app: FastifyInstance) {
         // 计算授权到期时间
         const grantedUntil = new Date(Date.now() + redeemCode.durationDays * 24 * 60 * 60 * 1000);
 
-        // 记录使用 + 更新使用次数
-        await db.$transaction([
-            db.redeemCodeUsage.create({
-                data: {
-                    redeemCodeId: redeemCode.id,
-                    deviceId,
-                    grantedUntil,
-                },
-            }),
-            db.redeemCode.update({
-                where: { id: redeemCode.id },
-                data: { usedCount: { increment: 1 } },
-            }),
-            db.device.update({
-                where: { id: deviceId },
-                data: {
-                    subscriptionStatus: 'active',
-                    trialExpiresAt: grantedUntil,
-                },
-            }),
-        ]);
+        // 在事务内做 usedCount 检查 + 递增，防止并发超额兑换
+        try {
+            await db.$transaction(async (tx) => {
+                const freshCode = await tx.redeemCode.findUnique({
+                    where: { id: redeemCode.id },
+                    select: { usedCount: true, maxUses: true },
+                });
+                if (!freshCode || freshCode.usedCount >= freshCode.maxUses) {
+                    throw Object.assign(new Error('code_exhausted'), { code: 'code_exhausted' });
+                }
+
+                await tx.redeemCodeUsage.create({
+                    data: { redeemCodeId: redeemCode.id, deviceId, grantedUntil },
+                });
+                await tx.redeemCode.update({
+                    where: { id: redeemCode.id },
+                    data: { usedCount: { increment: 1 } },
+                });
+                await tx.device.update({
+                    where: { id: deviceId },
+                    data: {
+                        subscriptionStatus: 'active',
+                        trialExpiresAt: grantedUntil,
+                    },
+                });
+            });
+        } catch (err: any) {
+            if (err?.code === 'code_exhausted') {
+                return reply.code(410).send({ error: 'code_exhausted', message: 'This code has been fully redeemed' });
+            }
+            throw err;
+        }
 
         clearFailures(deviceId);
 
@@ -145,9 +152,7 @@ export async function redeemRoutes(app: FastifyInstance) {
             note?: string;
         };
 
-        // 用 REVOKE_SHARED_SECRET 做管理员鉴权
-        const adminSecret = process.env.REVOKE_SHARED_SECRET;
-        if (!adminSecret || secret !== adminSecret) {
+        if (!config.revokeSharedSecret || secret !== config.revokeSharedSecret) {
             return reply.code(403).send({ error: 'Unauthorized' });
         }
 

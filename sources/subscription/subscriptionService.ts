@@ -1,5 +1,6 @@
 import { db } from '@/storage/db';
 import { config } from '@/config';
+import { eventRouter } from '@/socket/socketServer';
 
 export interface AccessCheck {
     allowed: boolean;
@@ -139,7 +140,10 @@ export async function verifyPayment(
 
     await db.device.update({
         where: { id: deviceId },
-        data: { subscriptionStatus: 'active' },
+        data: {
+            subscriptionStatus: 'active',
+            trialExpiresAt: null,  // clear trial expiry — paid users have permanent access
+        },
     });
 
     console.log(`[subscription] Payment verified for device ${deviceId}, txn=${originalTransactionId}`);
@@ -226,6 +230,14 @@ export async function revokeSubscription(originalTransactionId: string): Promise
             where: { id: { in: deviceIds }, subscriptionStatus: 'active' },
             data: { subscriptionStatus: 'expired' },
         });
+
+        // Notify and disconnect any currently connected sockets
+        for (const deviceId of deviceIds) {
+            eventRouter.emitToDevice(deviceId, 'subscription-required', {
+                reason: 'revoked',
+                status: 'expired',
+            });
+        }
     }
 
     console.log(`[subscription] Revoked txn=${originalTransactionId}, affected ${deviceIds.length} devices`);
@@ -247,16 +259,38 @@ export async function expireStaleTrials(): Promise<number> {
     return result.count;
 }
 
-/** Find devices whose trial expires within 24h (for notification). */
+/**
+ * Find devices whose trial expires within 24h and haven't been notified yet
+ * (or were last notified >23h ago). Marks them as notified atomically to
+ * prevent sending 48 pushes over the 24h window.
+ */
 export async function findExpiringTrials(): Promise<Array<{ id: string; trialExpiresAt: Date }>> {
     const now = new Date();
     const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const notifyThreshold = new Date(now.getTime() - 23 * 60 * 60 * 1000);
+
     const devices = await db.device.findMany({
         where: {
             subscriptionStatus: 'trial',
             trialExpiresAt: { gte: now, lte: in24h },
+            OR: [
+                { trialExpireNotifiedAt: null },
+                { trialExpireNotifiedAt: { lt: notifyThreshold } },
+            ],
         },
         select: { id: true, trialExpiresAt: true },
     });
-    return devices.filter((d): d is { id: string; trialExpiresAt: Date } => d.trialExpiresAt !== null);
+
+    const eligible = devices.filter((d): d is { id: string; trialExpiresAt: Date } =>
+        d.trialExpiresAt !== null
+    );
+
+    if (eligible.length > 0) {
+        await db.device.updateMany({
+            where: { id: { in: eligible.map(d => d.id) } },
+            data: { trialExpireNotifiedAt: now },
+        });
+    }
+
+    return eligible;
 }

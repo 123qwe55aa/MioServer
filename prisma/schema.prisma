@@ -38,9 +38,10 @@ model Device {
   knownProjects KnownProject[]
 
   // Subscription / trial fields (only meaningful for iOS devices)
-  subscriptionStatus String   @default("none") // none | trial | active | expired
-  trialStartedAt     DateTime?
-  trialExpiresAt     DateTime?
+  subscriptionStatus         String    @default("none") // none | trial | active | expired
+  trialStartedAt             DateTime?
+  trialExpiresAt             DateTime?
+  trialExpireNotifiedAt      DateTime? // last time we sent the "trial expiring" push — prevents spam
 
   // Device linking (paired devices can see each other's sessions)
   linksAsSource DeviceLink[] @relation("LinkSource")
