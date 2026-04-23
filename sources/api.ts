@@ -12,6 +12,8 @@ import { sessionRoutes } from '@/session/sessionRoutes';
 import { pushRoutes } from '@/push/pushRoutes';
 import { blobRoutes } from '@/blob/blobRoutes';
 import { capabilityRoutes } from '@/capabilities/capabilityRoutes';
+import { subscriptionRoutes } from '@/subscription/subscriptionRoutes';
+import { redeemRoutes } from '@/subscription/redeemRoutes';
 import { config } from '@/config';
 
 export async function startApi() {
@@ -41,6 +43,8 @@ export async function startApi() {
     await app.register(pushRoutes);
     await app.register(blobRoutes);
     await app.register(capabilityRoutes);
+    await app.register(subscriptionRoutes);
+    await app.register(redeemRoutes);
 
     await app.listen({ port: config.port, host: '0.0.0.0' });
     console.log(`CodeLight Server listening on port ${config.port}`);

@@ -4,6 +4,8 @@ import { db } from '@/storage/db';
 import { authMiddleware } from '@/auth/middleware';
 import { linkDevices } from '@/auth/deviceAccess';
 import { eventRouter } from '@/socket/socketServer';
+import { startTrial } from '@/subscription/subscriptionService';
+import { config } from '@/config';
 
 export async function pairingRoutes(app: FastifyInstance) {
 
@@ -168,6 +170,22 @@ export async function pairingRoutes(app: FastifyInstance) {
         }
 
         await linkDevices(macDevice.id, iosDeviceId);
+
+        // Auto-start trial for iOS device on first pairing
+        if (config.enforceSubscription) {
+            try {
+                const iosDevice = await db.device.findUnique({
+                    where: { id: iosDeviceId },
+                    select: { kind: true, subscriptionStatus: true },
+                });
+                if (iosDevice?.kind === 'ios' && iosDevice.subscriptionStatus === 'none') {
+                    await startTrial(iosDeviceId);
+                }
+            } catch (err) {
+                console.error(`[pairing] Failed to auto-start trial for ${iosDeviceId}:`, err);
+                // 配对成功但试用启动失败，不阻断配对流程
+            }
+        }
 
         console.log(`[pairing] Code-redeemed link: ${macDevice.id} <-> ${iosDeviceId}`);
 
