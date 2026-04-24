@@ -194,6 +194,18 @@ export function registerSessionHandler(
                     where: { sessionId_localId: { sessionId: data.sid, localId: data.localId } },
                 });
                 if (existing) {
+                    // Update content if changed (e.g. tool status running→success after completion)
+                    if (existing.content !== data.message) {
+                        await db.sessionMessage.update({
+                            where: { id: existing.id },
+                            data: { content: data.message },
+                        });
+                        eventRouter.emitUpdate(deviceId, 'update', {
+                            type: 'message-updated',
+                            sessionId: data.sid,
+                            message: { id: existing.id, seq: existing.seq, content: data.message, localId: data.localId },
+                        }, { type: 'all-interested-in-session', sessionId: data.sid }, socket);
+                    }
                     callback?.({ id: existing.id, seq: existing.seq });
                     return;
                 }
