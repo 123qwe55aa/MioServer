@@ -126,6 +126,14 @@ export async function sessionRoutes(app: FastifyInstance) {
         const { tag, metadata } = request.body as { tag: string; metadata: string };
         const deviceId = request.deviceId!;
 
+        // Ensure device record exists before creating session (FK constraint).
+        // This handles JWT devices that may not have been registered yet.
+        await db.device.upsert({
+            where: { id: deviceId },
+            create: { id: deviceId, name: 'Claude Code Sync', kind: 'mac' },
+            update: {},
+        });
+
         const session = await db.session.upsert({
             where: { deviceId_tag: { deviceId, tag } },
             create: { tag, deviceId, metadata },
