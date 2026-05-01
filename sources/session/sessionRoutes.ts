@@ -150,10 +150,20 @@ export async function sessionRoutes(app: FastifyInstance) {
 
         // Ensure device record exists before creating session (FK constraint).
         // Use findFirst + create to avoid upsert unique constraint issues.
+        // Only set publicKey if the device has no publicKey yet (preserve Ed25519
+        // device records whose publicKey was set during Ed25519 auth registration).
         const existing = await db.device.findFirst({ where: { id: deviceId } });
         if (!existing) {
             await db.device.create({
                 data: { id: deviceId, name: 'Claude Code Sync', kind: 'mac', publicKey: deviceId },
+            });
+        } else if (!existing.publicKey || existing.publicKey === deviceId) {
+            // Back-fill publicKey for devices that were auto-created without one
+            // (e.g. sync-daemon HS256 JWT devices). Don't touch devices whose
+            // publicKey is a real Ed25519 key from Ed25519 auth registration.
+            await db.device.update({
+                where: { id: deviceId },
+                data: { publicKey: deviceId },
             });
         }
 
