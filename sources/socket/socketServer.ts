@@ -26,7 +26,7 @@ export function startSocket(server: HttpServer) {
         const token = (socket.handshake.auth.token || socket.handshake.query.token) as string | undefined;
         const clientType = ((socket.handshake.auth.clientType || socket.handshake.query.clientType) as string) || 'user-scoped';
         const sessionId = (socket.handshake.auth.sessionId || socket.handshake.query.sessionId) as string | undefined;
-        console.log(`Socket connection: clientType=${clientType}, hasToken=${!!token}, deviceId=${payload.deviceId}`);
+        console.log(`Socket connection: clientType=${clientType}, hasToken=${!!token}`);
 
         if (!token) {
             socket.disconnect();
@@ -38,6 +38,8 @@ export function startSocket(server: HttpServer) {
             socket.disconnect();
             return;
         }
+
+        console.log(`Socket connection: deviceId=${payload.deviceId}, clientType=${clientType}`);
 
         // ── Subscription check ──────────────────────────────────────────
         let trackedTransactionId: string | null = null;
