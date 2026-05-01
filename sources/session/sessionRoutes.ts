@@ -119,6 +119,7 @@ export async function sessionRoutes(app: FastifyInstance) {
             ownerDeviceKind: s.device.kind,
             device: undefined,
         }));
+        console.log(`[sessions] Returning ${flattened.length} sessions, first: ${JSON.stringify(flattened[0]?.id)} active=${flattened[0]?.active}`);
 
         return { sessions: flattened };
     });
