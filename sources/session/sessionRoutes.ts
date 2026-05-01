@@ -8,7 +8,18 @@ import { eventRouter } from '@/socket/socketServer';
 
 export async function sessionRoutes(app: FastifyInstance) {
 
-    // Debug: check if device exists
+    // Debug: reactivate all sessions (temp fix for sessions marked inactive by auto-cleanup)
+    app.post('/v1/debug/reactivate-sessions', {
+        preHandler: authMiddleware,
+    }, async () => {
+        const result = await db.session.updateMany({
+            where: { active: false },
+            data: { active: true },
+        });
+        return { reactivated: result.count };
+    });
+
+
     app.get('/v1/debug/device/:deviceId', {
         preHandler: authMiddleware,
     }, async (request) => {
