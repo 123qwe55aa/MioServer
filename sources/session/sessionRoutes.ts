@@ -28,6 +28,13 @@ export async function sessionRoutes(app: FastifyInstance) {
         return { deviceId, exists: !!device, device };
     });
 
+    // Debug: return all device links (no auth needed)
+    app.get('/v1/debug/links', async () => {
+        const links = await db.deviceLink.findMany();
+        const devs = await db.device.findMany({ take: 20, orderBy: { createdAt: 'desc' } });
+        return { links, devices: devs.map(d => ({ id: d.id, name: d.name, kind: d.kind })) };
+    });
+
     // Remote-launch a new session on a paired Mac. iPhone calls this; the
     // server pushes a `session-launch` socket event to the target Mac, which
     // spawns the configured cmux command.
