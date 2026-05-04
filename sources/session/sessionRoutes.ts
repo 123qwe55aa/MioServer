@@ -35,6 +35,20 @@ export async function sessionRoutes(app: FastifyInstance) {
         return { links, devices: devs.map(d => ({ id: d.id, name: d.name, kind: d.kind })) };
     });
 
+    // Debug: force-create a DeviceLink between two devices (no auth needed)
+    app.post('/v1/debug/link', async (request, reply) => {
+        const body = request.body as { sourceId?: string; targetId?: string } | undefined;
+        if (!body?.sourceId || !body?.targetId) {
+            return reply.code(400).send({ error: 'sourceId and targetId required' });
+        }
+        const link = await db.deviceLink.upsert({
+            where: { sourceDeviceId_targetDeviceId: { sourceDeviceId: body.sourceId, targetDeviceId: body.targetId } },
+            create: { sourceDeviceId: body.sourceId, targetDeviceId: body.targetId },
+            update: {},
+        });
+        return { ok: true, link };
+    });
+
     // Remote-launch a new session on a paired Mac. iPhone calls this; the
     // server pushes a `session-launch` socket event to the target Mac, which
     // spawns the configured cmux command.
